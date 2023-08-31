@@ -7,8 +7,13 @@ import (
 	"os/exec"
 	"sync"
 	"time"
-	//	"net"
-	//	"github.com/vishvananda/netlink"
+	"strings"
+	"regexp"
+	"strconv"	
+//	"reflect"
+	//"net"
+	netlink "github.com/vishvananda/netlink"
+	//"github.com/vishvananda/netns"
 	"gopkg.in/yaml.v3"
 	"io/ioutil"
 )
@@ -44,15 +49,16 @@ type Config_t struct {
 
 type Direction int
 
-func run(cmd string) {
-	log.Println(cmd)
+
+func run(cmd1 string, cmd2 string, cmd3 string) string {
+	//log.Println(cmd)
 	//log.Println("Executing command {cmd}")
-	out, err := exec.Command(cmd, "-rin", " monitor_netlink").Output()
+	out, err := exec.Command(cmd1,cmd2,cmd3).Output()
 	if err != nil {
 		log.Println("%s", err)
 	}
 	output := string(out[:])
-	fmt.Println(output)
+	return output
 }
 
 const ( // Route direction
@@ -72,20 +78,48 @@ const ( //Nexthop TYPE & L2NEXTHOP TYPE & FDBentry
 )
 
 //Subscribers    list[Subscriber] = []
+type Neigh_key struct {
+	dst string
+	VRF_name string
+	dev  int 
+}
 
- 
-var	Routes  map[string]Route
-var	Nexthops map[string]Nexthop
-var	Neighbors map[string]Neighbor
-var	FDB  map[string]FdbEntry
-var	L2Nexthops map[string]L2Nexthop
+
+type Route_key struct {
+	Table int
+	Dst string
+}
+
+type Nexthop_key struct {
+	dst string
+	VRF_name string
+	dev  int 
+	local int
+}
+
+type FDB_key struct {
+	vlan_id int
+	mac string
+}
+
+type L2Nexthop_key struct {
+	dev int
+	vlan_id int
+	dst string
+}
+var	Routes  map[Route_key]Route
+var	Nexthops map[Nexthop_key]Nexthop
+var	Neighbors map[Neigh_key]Neigh_value
+var	FDB  map[FDB_key]FdbEntry
+var	L2Nexthops map[L2Nexthop_key]L2Nexthop
+
 
 	// Shadow tables for building a new netlink DB snapshot
-var	LatestRoutes  map[string]Route 
-var	LatestNexthops map[string]Nexthop
-var	LatestNeighbors map[string]Neighbor
-var	LatestFDB  map[string]FdbEntry
-var	LatestL2Nexthops map[string]L2Nexthop
+var	LatestRoutes  map[Route_key]Route 
+var	LatestNexthops map[Nexthop_key]Nexthop
+var LatestNeighbors = make(map[Neigh_key]Neigh_value)
+var	LatestFDB  map[FDB_key]FdbEntry
+var	LatestL2Nexthops map[L2Nexthop_key]L2Nexthop
 
 type NetlinkDB struct {
 	 
@@ -154,6 +188,9 @@ type Nexthop struct {
 
 type Fi func(map[string]string) //FdbEntry_init
 
+//type Commonfp interface {
+//}
+
 type FdbEntry struct {
 	FdbEntry_init   *Fi
 	Fdbentry_common Commonfp
@@ -180,11 +217,167 @@ type Neighbor struct {
 
 var wg sync.WaitGroup
 
-func read_latest_netlink_state() {
 
+func read_latest_netlink_state() {
+	//log.Println("In read_latest_netlink_state function \n")
+	// LatestRoutes = nil
+	// LatestNexthops = nil
+	// LatestNeighbors = nil
+	// LatestFDB = nil
+	// LatestL2Nexthops = nil
+	read_neighbors()
+	read_routes()
 }
 
-func notify_route_added(R map[string]Route){
+func ensureIndex(link *netlink.LinkAttrs) {
+	if link != nil && link.Index == 0 {
+			newlink, _ := netlink.LinkByName(link.Name)
+			if newlink != nil {
+					link.Index = newlink.Attrs().Index
+			}
+	}
+}
+
+
+type dump_entries interface {
+	 add_neigh(string)
+	 dump_route()
+}
+
+type Neigh_Struct struct {
+	 Neigh0 []netlink.Neigh
+	 Err error
+}
+
+
+type Route_Struct struct {
+	Route0 []netlink.Route
+	Err error 
+}
+
+type Neigh_value struct {
+	Neigh_val netlink.Neigh
+	Name       string 
+}
+
+func Check_dup(tmp_key Neigh_key) bool {
+	var dup = false
+	for k,_ := range LatestNeighbors {
+		if k == tmp_key{
+		   dup = true	
+		   break
+		   }  
+	} 
+	return dup		
+}
+func (dump Neigh_Struct ) add_neigh (str string){
+	 
+	for _, n := range dump.Neigh0 {
+		if (n.State !=  netlink.NUD_NONE && n.State !=  netlink.NUD_INCOMPLETE && n.State !=  netlink.NUD_FAILED && n.State !=  netlink.NUD_NOARP) { 
+			temp_key := Neigh_key{dst :n.IP.String(),VRF_name: "",dev: n.LinkIndex}
+			temp_val := Neigh_value{Neigh_val : n , Name : str}
+			if(len(LatestNeighbors)==0) {
+				LatestNeighbors[temp_key]= temp_val
+			} else {
+				if !Check_dup(temp_key){
+				   LatestNeighbors[temp_key]= temp_val
+				}   
+			}	
+		}
+	   }
+}
+
+
+func dunp_neighdb() {
+	neigh_state := map[int]string{
+		netlink.NUD_NONE      : "NONE" ,
+		netlink.NUD_INCOMPLETE: "INCOMPLETE",
+		netlink.NUD_REACHABLE : "REACHABLE",
+		netlink.NUD_STALE     : "STALE",
+		netlink.NUD_DELAY     : "DELAY",
+		netlink.NUD_PROBE     : "PROBE",
+		netlink.NUD_FAILED    : "FAILED",
+		netlink.NUD_NOARP     : "NOARP",
+		netlink.NUD_PERMANENT : "PERMANENT",
+	} 
+	for _, n := range LatestNeighbors {
+		str := fmt.Sprintf("Linkindex:%[2]d, Family:%[2]d Type:%[2]d Flags:%[2]d Vlan:%[2]d VNI:%[2]d MasterIndex:%[2]d dev : %s State: "+neigh_state[n.Neigh_val.State]+"  Mac Address: "+ n.Neigh_val.HardwareAddr.String()+"  LLIPAddr: "+n.Neigh_val.LLIPAddr.String()+" IP Address: "+n.Neigh_val.IP.String(),n.Neigh_val.LinkIndex,n.Neigh_val.Family,n.Neigh_val.Type,n.Neigh_val.Flags,n.Neigh_val.Vlan,n.Neigh_val.VNI,n.Neigh_val.MasterIndex,n.Name)
+		fmt.Println(str)
+			
+    }
+}
+
+func (dump Route_Struct) dump_route(){
+	for _, n := range dump.Route0 {
+		//fmt.Println(n.String())
+		str := fmt.Sprintf("Linkindex:%[4]d, ILinkIndex:%[4]d Scope:%[4]d type:%[4]d flags:%[4]d Table:%[4]d MTU:%[4]d Window:%[4]d ",
+							n.LinkIndex,n.ILinkIndex,n.Scope,n.Type,n.Flags,n.Table,n.MTU,n.Tos)
+		str = fmt.Sprintf("%s IP Address %s\n",str,n.Src.String())
+		fmt.Print(str)
+	}
+}
+
+
+
+func read_neighbors() {
+
+	link_int := []string{"lo","enp0s1f0", "enp0s1f0d1","enp0s1f0d2","enp0s1f0d3","enp0s1f0d4","enp0s1f0d5","rep-GRD","vxlan-vtep","br-tenant", "red","br-red","vxlan-red","rep-red","red-30","vport-18","blue","br-blue","vxlan-blue","rep-blue","green","br-green","vxlan-green","rep-green","blue-10","green-20","green-21","green-22","vport-35"}
+	for _,str := range link_int  {
+	device := netlink.Device{netlink.LinkAttrs{Name: str}} //vxlan-vtep"}}
+	ensureIndex(device.Attrs())
+	var neigh  Neigh_Struct
+ 	neigh.Neigh0 , neigh.Err = netlink.NeighList(device.Index, netlink.FAMILY_V4)
+	if neigh.Err != nil {
+	    fmt.Print("Failed to NeighList: %v", neigh.Err)
+	}
+	neigh.add_neigh(device.Attrs().Name)
+	//dunp_neighdb()
+	}
+}
+var vrf_table = make(map[string]int)
+
+func get_vrf_table() {
+	var j int
+	re := regexp.MustCompile("[0-9]+")
+	vrf_list := run("ip","vrf","show")
+	res1:=strings.Split(vrf_list,"\n")
+	
+	for i:=0; i< len(res1) ; i++ {
+		if (i>1){
+			res2:=strings.Split(res1[i]," ")
+//			fmt.Printf(res2[0])
+			str1 := re.FindAllString(res1[i], -1)
+			if (str1 != nil){	
+				j ,_ = strconv.Atoi(str1[0])
+		 		vrf_table[res2[0]] = j
+			}	
+		}
+	}
+}	
+func read_routes() {
+	
+	link_int := []string{"lo","enp0s1f0", "enp0s1f0d1","enp0s1f0d2","enp0s1f0d3","enp0s1f0d4","enp0s1f0d5","rep-GRD","vxlan-vtep","br-tenant", "red","br-red","vxlan-red","rep-red","red-30","vport-18","blue","br-blue","vxlan-blue","rep-blue","green","br-green","vxlan-green","rep-green","blue-10","green-20","green-21","green-22","vport-35"}
+	get_vrf_table()
+	for _,V := range vrf_table {
+		fmt.Println(V+1)
+	}
+	for _,str := range link_int  {
+	link, err := netlink.LinkByName(str)
+	if err != nil {
+		fmt.Println(err)
+		continue
+	}	
+	var routes Route_Struct
+	routes.Route0,routes.Err = netlink.RouteList(link, netlink.FAMILY_V4)
+	if routes.Err != nil {
+		fmt.Println(routes.Err)
+	}
+		//fmt.Printf("Interface Name: %s\n",link.Attrs().Name)
+	//routes.dump_route()
+	}
+}
+
+func notify_route_added(R map[Route_key]Route){
 	log.Println("Notify: Adding {R.format()}.")
 
 /*for subscriber in cls.Subscribers:
@@ -195,7 +388,7 @@ func notify_route_added(R map[string]Route){
 */
 }
  
-func notify_route_deleted(R map[string]Route){
+func notify_route_deleted(R map[Route_key]Route){
 	log.Println("Notify: Deleting {R.format()}.")
 
 /*for subscriber in cls.Subscribers:
@@ -206,7 +399,7 @@ func notify_route_deleted(R map[string]Route){
 */
 }
  
-func notify_route_updated(new map[string]Route, old map[string]Route){
+func notify_route_updated(new map[Route_key]Route, old map[Route_key]Route){
 	log.Println("Notify: Replacing {old.format()}\n")
 
 /*for subscriber in cls.Subscribers:
@@ -218,7 +411,7 @@ func notify_route_updated(new map[string]Route, old map[string]Route){
 }		
 
  
-func notify_nexthop_added(NH map[string]Nexthop){
+func notify_nexthop_added(NH map[Nexthop_key]Nexthop){
 	log.Println("Notify: Adding {NH.format()}.")
 
 /*for subscriber in cls.Subscribers:
@@ -229,7 +422,7 @@ func notify_nexthop_added(NH map[string]Nexthop){
 */
 }
  
-func notify_nexthop_deleted( NH map[string]Nexthop){
+func notify_nexthop_deleted( NH map[Nexthop_key]Nexthop){
 	log.Println("Notify: Deleting {NH.format()}.")
 
 /*for subscriber in cls.Subscribers:
@@ -240,7 +433,7 @@ func notify_nexthop_deleted( NH map[string]Nexthop){
 */
 }
  
-func notify_nexthop_updated(new map[string]Nexthop, old map[string]Nexthop){
+func notify_nexthop_updated(new map[Nexthop_key]Nexthop, old map[Nexthop_key]Nexthop){
 	log.Println("Notify: Replacing {old.format()} with {new.format()}.")
 
 /* for subscriber in cls.Subscribers:
@@ -251,7 +444,7 @@ func notify_nexthop_updated(new map[string]Nexthop, old map[string]Nexthop){
 */
 }
  
-func notify_fdb_entry_added(M map[string]FdbEntry){
+func notify_fdb_entry_added(M map[FDB_key]FdbEntry){
 	log.Println("Notify: Adding {M.format()}.")
 
 /*for subscriber in cls.Subscribers:
@@ -262,7 +455,7 @@ func notify_fdb_entry_added(M map[string]FdbEntry){
 */
 }
 
-func notify_fdb_entry_deleted(M map[string]FdbEntry){
+func notify_fdb_entry_deleted(M map[FDB_key]FdbEntry){
     log.Println("Notify: Deleting {M.format()}.")
 
 /*for subscriber in cls.Subscribers:
@@ -273,7 +466,7 @@ func notify_fdb_entry_deleted(M map[string]FdbEntry){
 */
 }
  
-func notify_fdb_entry_updated(new map[string]FdbEntry, old map[string]FdbEntry){
+func notify_fdb_entry_updated(new map[FDB_key]FdbEntry, old map[FDB_key]FdbEntry){
     log.Println("Notify: Replacing {old.format()} with {new.format()}.")
 
 /*for subscriber in cls.Subscribers:
@@ -283,8 +476,7 @@ func notify_fdb_entry_updated(new map[string]FdbEntry, old map[string]FdbEntry){
 		logger.exception(f"Netlink subscriber {subscriber} failed to update {new}")
 */
 }
- 
-func notify_l2_nexthop_added(L2N map[string]L2Nexthop){
+func notify_l2_nexthop_added(L2N map[L2Nexthop_key]L2Nexthop){
     log.Println("Notify: Adding {L2N.format()}.")
 
 /*for subscriber in cls.Subscribers:
@@ -295,7 +487,7 @@ func notify_l2_nexthop_added(L2N map[string]L2Nexthop){
 */
 }
  
-func notify_l2_nexthop_deleted(L2N map[string]L2Nexthop){
+func notify_l2_nexthop_deleted(L2N map[L2Nexthop_key]L2Nexthop){
     log.Println("Notify: Deleting {L2N.format()}.")
 
 /*for subscriber in cls.Subscribers:
@@ -306,7 +498,7 @@ func notify_l2_nexthop_deleted(L2N map[string]L2Nexthop){
 */
 }
  
-func notify_l2_nexthop_updated(new map[string]L2Nexthop, old map[string]L2Nexthop){
+func notify_l2_nexthop_updated(new map[L2Nexthop_key]L2Nexthop, old map[L2Nexthop_key]L2Nexthop){
 	log.Println("Notify: Replacing {old.format()} with {new.format()}.")
 
 /*for subscriber in cls.Subscribers:
@@ -317,7 +509,7 @@ func notify_l2_nexthop_updated(new map[string]L2Nexthop, old map[string]L2Nextho
 */
 }
 
-func notify_route_changes(new map[string]Route, old map[string]Route,added_cb func (R map[string]Route), updated_cb func (N map[string]Route, O map[string]Route), deleted_cb func (R map[string]Route)) {
+func notify_route_changes(new map[Route_key]Route, old map[Route_key]Route,added_cb func (R map[Route_key]Route), updated_cb func (N map[Route_key]Route, O map[Route_key]Route), deleted_cb func (R map[Route_key]Route)) {
 	/*old_keys = Old.keys()
 	new_keys = New.keys()
 	added = [New[k] for k in (new_keys - old_keys)]
@@ -329,7 +521,7 @@ func notify_route_changes(new map[string]Route, old map[string]Route,added_cb fu
 	*/
 }
 
-func notify_nexthop_changes(new map[string]Nexthop,old map[string]Nexthop,added_cb func (N map[string]Nexthop), updated_cb func (N map[string]Nexthop, O map[string]Nexthop), deleted_cb func (N map[string]Nexthop) ){
+func notify_nexthop_changes(new map[Nexthop_key]Nexthop,old map[Nexthop_key]Nexthop,added_cb func (N map[Nexthop_key]Nexthop), updated_cb func (N map[Nexthop_key]Nexthop, O map[Nexthop_key]Nexthop), deleted_cb func (N map[Nexthop_key]Nexthop) ){
 	/*old_keys = Old.keys()
 	new_keys = New.keys()
 	added = [New[k] for k in (new_keys - old_keys)]
@@ -342,7 +534,7 @@ func notify_nexthop_changes(new map[string]Nexthop,old map[string]Nexthop,added_
 }
 
 
-func notify_FDB_changes(new map[string]FdbEntry, old map[string]FdbEntry,added_cb func (F map[string]FdbEntry), updated_cb func (N map[string]FdbEntry, O map[string]FdbEntry), deleted_cb func (F map[string]FdbEntry) ){
+func notify_FDB_changes(new map[FDB_key]FdbEntry, old map[FDB_key]FdbEntry,added_cb func (F map[FDB_key]FdbEntry), updated_cb func (N map[FDB_key]FdbEntry, O map[FDB_key]FdbEntry), deleted_cb func (F map[FDB_key]FdbEntry) ){
 /*old_keys = Old.keys()
 	new_keys = New.keys()
 	added = [New[k] for k in (new_keys - old_keys)]
@@ -354,7 +546,7 @@ func notify_FDB_changes(new map[string]FdbEntry, old map[string]FdbEntry,added_c
 	*/
 }
 
-func notify_L2nexthop_changes(new map[string]L2Nexthop, old map[string]L2Nexthop,added_cb func (L2N map[string]L2Nexthop), updated_cb func (N map[string]L2Nexthop, O map[string]L2Nexthop), deleted_cb func (L2N map[string]L2Nexthop) ){
+func notify_L2nexthop_changes(new map[L2Nexthop_key]L2Nexthop, old map[L2Nexthop_key]L2Nexthop,added_cb func (L2N map[L2Nexthop_key]L2Nexthop), updated_cb func (N map[L2Nexthop_key]L2Nexthop, O map[L2Nexthop_key]L2Nexthop), deleted_cb func (L2N map[L2Nexthop_key]L2Nexthop) ){
 /*old_keys = Old.keys()
 	new_keys = New.keys()
 	added = [New[k] for k in (new_keys - old_keys)]
@@ -366,8 +558,9 @@ func notify_L2nexthop_changes(new map[string]L2Nexthop, old map[string]L2Nexthop
 	*/
 }
 
-func annotate_db_entries(LatestRoutes map[string]Route, LatestNexthops map[string]Nexthop , LatestFDB map[string]FdbEntry ,LatestL2Nexthops map[string]L2Nexthop ){
-/*	for NH in LatestNexthops.values():
+func annotate_db_entries(LatestRoutes map[Route_key]Route, LatestNexthops map[Nexthop_key]Nexthop , LatestFDB map[FDB_key]FdbEntry ,LatestL2Nexthops map[L2Nexthop_key]L2Nexthop ){
+	//log.Println("In annotate_db_entries function \n")
+	/*	for NH in LatestNexthops.values():
 		NH.annotate()
 	for R in LatestRoutes.values():
 		R.annotate()
@@ -378,8 +571,9 @@ func annotate_db_entries(LatestRoutes map[string]Route, LatestNexthops map[strin
 */
 }
 
-func apply_install_filters(LatestRoutes map[string]Route, LatestNexthops map[string]Nexthop , LatestFDB map[string]FdbEntry ,LatestL2Nexthops map[string]L2Nexthop){
-/*	for k, R in list(LatestRoutes.items()):
+func apply_install_filters(LatestRoutes map[Route_key]Route, LatestNexthops map[Nexthop_key]Nexthop , LatestFDB map[FDB_key]FdbEntry ,LatestL2Nexthops map[L2Nexthop_key]L2Nexthop){
+	//log.Println("In apply_install_filters function \n")
+	/*	for k, R in list(LatestRoutes.items()):
 		if not R.install_filter():
 			//Remove route from its nexthop(s)
 			for NH in R.nexthops:
@@ -422,25 +616,46 @@ func resync_with_kernel() {
                 notify_l2_nexthop_added,
                 notify_l2_nexthop_updated,
                 notify_l2_nexthop_deleted)
+	// with db_lock:
+	Routes = LatestRoutes
+	Nexthops = LatestNexthops
+	Neighbors = LatestNeighbors
+	FDB = LatestFDB
+	L2Nexthops = LatestL2Nexthops
+	// LatestRoutes = nil
+	// LatestNexthops = nil
+	// LatestNeighbors = nil
+	// LatestFDB = nil
+	// LatestL2Nexthops = nil
 
 }
+
+/*func GetContainerNetDevFromPci(netNSPath, pciAddress string) ([]string, error) {
+	PidSlice := strings.Split(netNSPath, "/")[1:3]
+	PidPath := strings.Join(PidSlice, "/")
+	containerPciNetPath := filepath.Join(PidPath, ContainerSysBusPci, pciAddress, "net")
+	return getFileNamesFromPath(containerPciNetPath)
+}
+*/
+
 
 func monitor_netlink(p4_enabled bool) {
 	// Wait for the p4 module to subscribe TBD
 	//while p4_enabled and not NetlinkDB.Subscribers:
 	//       time.sleep(1)
 	for stop_monitoring != true {
-		log.Print("netlink: Polling netlink databases.")
+		//log.Print("netlink: Polling netlink databases.")
 		resync_with_kernel()
-		log.Print("netlink: Polling netlink databases completed.")
+		//log.Print("netlink: Polling netlink databases completed.")
 		time.Sleep(time.Duration(poll_interval) * time.Second)
 	}
-	log.Println("netlink: Stopped periodic polling. Waiting for Infra DB cleanup to finish.")
+	//log.Println("netlink: Stopped periodic polling. Waiting for Infra DB cleanup to finish.\n")
 	time.Sleep(2 * time.Second)
-	log.Println("netlink: One final netlink poll to identify what's still left.")
-	resync_with_kernel()
+	//log.Println("netlink: One final netlink poll to identify what's still left.")
+	//resync_with_kernel()
 	// Inform subscribers to delete configuration for any still remaining Netlink DB objects.
-	log.Println("netlink: Delete any residual objects in DB")
+	//log.Println("netlink: Delete any residual objects in DB")
+    //  GetContainerNetDevFromPci()
 	/*for R in NetlinkDB.Routes.values():
 	      try: NetlinkDB.notify_route_deleted(R)
 	      except:
@@ -454,8 +669,8 @@ func monitor_netlink(p4_enabled bool) {
 	      except:
 	          logger.exception(f"Failed to clean up {str(M)}")
 	*/
-	log.Println("netlink: DB cleanup completed.")
-	run("grep")
+	//log.Println("netlink: DB cleanup completed.")
+	//run("grep")
 	wg.Done()
 }
 
@@ -472,19 +687,17 @@ func main() {
 		log.Fatal(err2)
 	}
 	poll_interval = config.Netlink.Poll_interval
-	log.Println(poll_interval)
+	//log.Println(poll_interval)
 	br_tenant = config.Linux_frr.Br_tenant
-	log.Println(br_tenant)
+	//log.Println(br_tenant)
 	nl_enabled := config.Netlink.Enable
 	if nl_enabled != true {
 		log.Println("netlink_monitor disabled")
 		return
-	} else {
-		log.Println("netlink_monitor Enabled")
 	}
 	go monitor_netlink(config.P4.Enable) //monitor Thread started
-	log.Println("Started netlink_monitor thread with {poll_interval} s poll interval.")
-	time.Sleep(5 * time.Second)
-	stop_monitoring = true
+	//log.Println("Started netlink_monitor thread with {poll_interval} s poll interval.")
+//	time.Sleep(1 * time.Second)
+//	stop_monitoring = true
 	wg.Wait()
 }
