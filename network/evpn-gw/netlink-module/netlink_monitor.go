@@ -107,19 +107,19 @@ type L2Nexthop_key struct {
 	vlan_id int
 	dst string
 }
-var	Routes  map[Route_key]Route
-var	Nexthops map[Nexthop_key]Nexthop
-var	Neighbors map[Neigh_key]Neigh_value
-var	FDB  map[FDB_key]FdbEntry
-var	L2Nexthops map[L2Nexthop_key]L2Nexthop
+var	Routes = make( map[Route_key]Route_value)
+var	Nexthops = make(map[Nexthop_key]Nexthop)
+var	Neighbors = make(map[Neigh_key]Neigh_value)
+var	FDB  = make(map[FDB_key]FdbEntry)
+var	L2Nexthops = make( map[L2Nexthop_key]L2Nexthop)
 
 
 	// Shadow tables for building a new netlink DB snapshot
-var	LatestRoutes  map[Route_key]Route 
-var	LatestNexthops map[Nexthop_key]Nexthop
-var LatestNeighbors = make(map[Neigh_key]Neigh_value)
-var	LatestFDB  map[FDB_key]FdbEntry
-var	LatestL2Nexthops map[L2Nexthop_key]L2Nexthop
+var	LatestRoutes =  make(map[Route_key]Route_value)
+var	LatestNexthops = make(map[Nexthop_key]Nexthop)
+var     LatestNeighbors = make(map[Neigh_key]Neigh_value)
+var	LatestFDB  =  make(map[FDB_key]FdbEntry)
+var	LatestL2Nexthops = make(map[L2Nexthop_key]L2Nexthop)
 
 type NetlinkDB struct {
 	 
@@ -226,6 +226,7 @@ func read_latest_netlink_state() {
 	// LatestFDB = nil
 	// LatestL2Nexthops = nil
 	read_neighbors()
+	fmt.Println("\n\n\n")
 	read_routes()
 }
 
@@ -241,7 +242,7 @@ func ensureIndex(link *netlink.LinkAttrs) {
 
 type dump_entries interface {
 	 add_neigh(string)
-	 dump_route()
+	 add_route()
 }
 
 type Neigh_Struct struct {
@@ -260,16 +261,35 @@ type Neigh_value struct {
 	Name       string 
 }
 
-func Check_dup(tmp_key Neigh_key) bool {
+type Route_value struct {
+	Route_val netlink.Route
+	Name       string 
+}
+
+
+func Check_Ndup(tmp_key Neigh_key) bool {
 	var dup = false
+//	fmt.Printf("dup %d", dup)
 	for k,_ := range LatestNeighbors {
-		if k == tmp_key{
-		   dup = true	
-		   break
-		   }  
-	} 
+			if k == tmp_key{
+		   	dup = true	
+		   	break
+			}
+	}  
 	return dup		
 }
+
+func Check_Rdup(tmp_key Route_key) bool {
+	var dup = false
+	for j,_ := range LatestRoutes {
+			if j == tmp_key{
+		   	dup = true	
+		   	break
+			}
+	}
+	return dup		
+}
+
 func (dump Neigh_Struct ) add_neigh (str string){
 	 
 	for _, n := range dump.Neigh0 {
@@ -279,7 +299,7 @@ func (dump Neigh_Struct ) add_neigh (str string){
 			if(len(LatestNeighbors)==0) {
 				LatestNeighbors[temp_key]= temp_val
 			} else {
-				if !Check_dup(temp_key){
+				if !Check_Ndup(temp_key){
 				   LatestNeighbors[temp_key]= temp_val
 				}   
 			}	
@@ -288,7 +308,7 @@ func (dump Neigh_Struct ) add_neigh (str string){
 }
 
 
-func dunp_neighdb() {
+func dump_neighDB() {
 	neigh_state := map[int]string{
 		netlink.NUD_NONE      : "NONE" ,
 		netlink.NUD_INCOMPLETE: "INCOMPLETE",
@@ -299,25 +319,70 @@ func dunp_neighdb() {
 		netlink.NUD_FAILED    : "FAILED",
 		netlink.NUD_NOARP     : "NOARP",
 		netlink.NUD_PERMANENT : "PERMANENT",
-	} 
+	}
 	for _, n := range LatestNeighbors {
-		str := fmt.Sprintf("Linkindex:%[2]d, Family:%[2]d Type:%[2]d Flags:%[2]d Vlan:%[2]d VNI:%[2]d MasterIndex:%[2]d dev : %s State: "+neigh_state[n.Neigh_val.State]+"  Mac Address: "+ n.Neigh_val.HardwareAddr.String()+"  LLIPAddr: "+n.Neigh_val.LLIPAddr.String()+" IP Address: "+n.Neigh_val.IP.String(),n.Neigh_val.LinkIndex,n.Neigh_val.Family,n.Neigh_val.Type,n.Neigh_val.Flags,n.Neigh_val.Vlan,n.Neigh_val.VNI,n.Neigh_val.MasterIndex,n.Name)
+		str := fmt.Sprintf("Linkindex:%[2]d, Family:%[2]d Type:%[2]d Flags:%[2]d Vlan:%[2]d VNI:%[2]d MasterIndex:%[2]d State: "+neigh_state[n.Neigh_val.State]+"  Dev : "+n.Name+"  Mac Address: "+ n.Neigh_val.HardwareAddr.String()+"  LLIPAddr: "+n.Neigh_val.LLIPAddr.String()+" IP Address: "+n.Neigh_val.IP.String(),n.Neigh_val.LinkIndex,n.Neigh_val.Family,n.Neigh_val.Type,n.Neigh_val.Flags,n.Neigh_val.Vlan,n.Neigh_val.VNI,n.Neigh_val.MasterIndex,n.Name)
 		fmt.Println(str)
 			
     }
 }
 
-func (dump Route_Struct) dump_route(){
-	for _, n := range dump.Route0 {
-		//fmt.Println(n.String())
-		str := fmt.Sprintf("Linkindex:%[4]d, ILinkIndex:%[4]d Scope:%[4]d type:%[4]d flags:%[4]d Table:%[4]d MTU:%[4]d Window:%[4]d ",
-							n.LinkIndex,n.ILinkIndex,n.Scope,n.Type,n.Flags,n.Table,n.MTU,n.Tos)
-		str = fmt.Sprintf("%s IP Address %s\n",str,n.Src.String())
-		fmt.Print(str)
+
+func dump_RouteDB() {
+	for _, n := range LatestRoutes {
+		str := fmt.Sprintf("Linkindex:%d, ILinkIndex:%d Scope:%d Dst: %s SCR :%s  GW: %s Protocol: %d Priority: %d  Table:%d Type: %d Tos: %d Flags: %d MTU: %d AdvMSS: %d HopLimit: %d\n\n",
+				 	    n.Route_val.LinkIndex,n.Route_val.ILinkIndex,n.Route_val.Scope,n.Route_val.Dst.String(),n.Route_val.Src.String(),n.Route_val.Gw.String(), n.Route_val.Protocol,n.Route_val.Priority,n.Route_val.Table,n.Route_val.Type,n.Route_val.Tos,n.Route_val.Flags,n.Route_val.MTU,n.Route_val.AdvMSS,n.Route_val.Hoplimit)
+		fmt.Println(str)
 	}
+		fmt.Printf("\n\n")	
 }
 
 
+func add_nexthop(n netlink.Route){
+	if len(n.MultiPath) > 0 {
+		//for  ( i = 0 ; nh:=n.MultiPath[i]; i++) {
+				// Hear need to fill the next hop data base  once the multipath = nil issue is fixed 
+		//}
+	}
+}
+
+func (dump Route_Struct) add_route(str string ){
+//	 var i int
+	for _, n := range dump.Route0 {
+		//str := fmt.Sprintf("Linkindex:%d, ILinkIndex:%d Scope:%d Dst: %s SCR :%s  GW: %s Protocol: %d Priority: %d  Table:%d Type: %d Tos: %d Flags: %d MTU: %d AdvMSS: %d HopLimit: %d\n\n",
+	    //	    n.LinkIndex,n.ILinkIndex,n.Scope,n.Dst.String(),n.Src.String(),n.Gw.String(), n.Protocol,n.Priority,n.Table,n.Type,n.Tos,n.Flags,n.MTU,n.AdvMSS,n.Hoplimit)
+			temp_key := Route_key{Table:n.Table, Dst : n.Dst.String()}
+			temp_val := Route_value{Route_val: n, Name : str}
+			if(len(LatestRoutes)==0) {
+				LatestRoutes[temp_key]= temp_val
+			} else {
+				if !Check_Rdup(temp_key){
+					LatestRoutes[temp_key]= temp_val
+				}		
+			}
+			//add_nexthop(n)   
+		}	
+}
+
+var vrf_table = make(map[string]int)
+
+func get_vrf_table() {
+	var j int
+	re := regexp.MustCompile("[0-9]+")
+	vrf_list := run("ip","vrf","show")
+	res1:=strings.Split(vrf_list,"\n")
+	
+	for i:=0; i< len(res1) ; i++ {
+		if (i>1){
+			res2:=strings.Split(res1[i]," ")
+ 			str1 := re.FindAllString(res1[i], -1)
+			if (str1 != nil){	
+				j ,_ = strconv.Atoi(str1[0])
+		 		vrf_table[res2[0]] = j
+			}	
+		}
+	}
+}	
 
 func read_neighbors() {
 
@@ -331,49 +396,35 @@ func read_neighbors() {
 	    fmt.Print("Failed to NeighList: %v", neigh.Err)
 	}
 	neigh.add_neigh(device.Attrs().Name)
-	//dunp_neighdb()
+//	dump_neighDB()
 	}
 }
-var vrf_table = make(map[string]int)
 
-func get_vrf_table() {
-	var j int
-	re := regexp.MustCompile("[0-9]+")
-	vrf_list := run("ip","vrf","show")
-	res1:=strings.Split(vrf_list,"\n")
-	
-	for i:=0; i< len(res1) ; i++ {
-		if (i>1){
-			res2:=strings.Split(res1[i]," ")
-//			fmt.Printf(res2[0])
-			str1 := re.FindAllString(res1[i], -1)
-			if (str1 != nil){	
-				j ,_ = strconv.Atoi(str1[0])
-		 		vrf_table[res2[0]] = j
-			}	
-		}
-	}
-}	
 func read_routes() {
-	
-	link_int := []string{"lo","enp0s1f0", "enp0s1f0d1","enp0s1f0d2","enp0s1f0d3","enp0s1f0d4","enp0s1f0d5","rep-GRD","vxlan-vtep","br-tenant", "red","br-red","vxlan-red","rep-red","red-30","vport-18","blue","br-blue","vxlan-blue","rep-blue","green","br-green","vxlan-green","rep-green","blue-10","green-20","green-21","green-22","vport-35"}
+
+//	link_int := []string{"lo","enp0s1f0", "enp0s1f0d1","enp0s1f0d2","enp0s1f0d3","enp0s1f0d4","enp0s1f0d5","rep-GRD","vxlan-vtep","br-tenant", "red","br-red","vxlan-red","rep-red","red-30","vport-18","blue","br-blue","vxlan-blue","rep-blue","green","br-green","vxlan-green","rep-green","blue-10","green-20","green-21","green-22","vport-35"}
 	get_vrf_table()
-	for _,V := range vrf_table {
-		fmt.Println(V+1)
-	}
-	for _,str := range link_int  {
-	link, err := netlink.LinkByName(str)
-	if err != nil {
-		fmt.Println(err)
-		continue
-	}	
+	for V,T := range vrf_table  {
+//	for _,str := range link_int  {
+	 link,err := netlink.LinkByName(V)
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+	//fmt.Printf("Ifname %s\n",str)		
 	var routes Route_Struct
-	routes.Route0,routes.Err = netlink.RouteList(link, netlink.FAMILY_V4)
+//	routes.Route0,routes.Err = netlink.RouteList(nil, netlink.FAMILY_V4)
+	routes.Route0,routes.Err = netlink.RouteListFiltered(netlink.FAMILY_V4, &netlink.Route{
+		LinkIndex: link.Attrs().Index,
+		Table:    T,
+		MultiPath: []*netlink.NexthopInfo{{LinkIndex: link.Attrs().Index}},
+	}, netlink.RT_FILTER_TABLE | netlink.RT_FILTER_IIF)
 	if routes.Err != nil {
 		fmt.Println(routes.Err)
 	}
-		//fmt.Printf("Interface Name: %s\n",link.Attrs().Name)
-	//routes.dump_route()
+
+	routes.add_route(V)
+	dump_RouteDB()
 	}
 }
 
@@ -509,7 +560,7 @@ func notify_l2_nexthop_updated(new map[L2Nexthop_key]L2Nexthop, old map[L2Nextho
 */
 }
 
-func notify_route_changes(new map[Route_key]Route, old map[Route_key]Route,added_cb func (R map[Route_key]Route), updated_cb func (N map[Route_key]Route, O map[Route_key]Route), deleted_cb func (R map[Route_key]Route)) {
+func notify_route_changes(new map[Route_key]Route_value, old map[Route_key]Route_value,added_cb func (R map[Route_key]Route), updated_cb func (N map[Route_key]Route, O map[Route_key]Route), deleted_cb func (R map[Route_key]Route)) {
 	/*old_keys = Old.keys()
 	new_keys = New.keys()
 	added = [New[k] for k in (new_keys - old_keys)]
@@ -558,7 +609,7 @@ func notify_L2nexthop_changes(new map[L2Nexthop_key]L2Nexthop, old map[L2Nexthop
 	*/
 }
 
-func annotate_db_entries(LatestRoutes map[Route_key]Route, LatestNexthops map[Nexthop_key]Nexthop , LatestFDB map[FDB_key]FdbEntry ,LatestL2Nexthops map[L2Nexthop_key]L2Nexthop ){
+func annotate_db_entries(LatestRoutes map[Route_key]Route_value, LatestNexthops map[Nexthop_key]Nexthop , LatestFDB map[FDB_key]FdbEntry ,LatestL2Nexthops map[L2Nexthop_key]L2Nexthop ){
 	//log.Println("In annotate_db_entries function \n")
 	/*	for NH in LatestNexthops.values():
 		NH.annotate()
@@ -571,7 +622,7 @@ func annotate_db_entries(LatestRoutes map[Route_key]Route, LatestNexthops map[Ne
 */
 }
 
-func apply_install_filters(LatestRoutes map[Route_key]Route, LatestNexthops map[Nexthop_key]Nexthop , LatestFDB map[FDB_key]FdbEntry ,LatestL2Nexthops map[L2Nexthop_key]L2Nexthop){
+func apply_install_filters(LatestRoutes map[Route_key]Route_value, LatestNexthops map[Nexthop_key]Nexthop , LatestFDB map[FDB_key]FdbEntry ,LatestL2Nexthops map[L2Nexthop_key]L2Nexthop){
 	//log.Println("In apply_install_filters function \n")
 	/*	for k, R in list(LatestRoutes.items()):
 		if not R.install_filter():
