@@ -1,0 +1,11 @@
+p4:
+    representors:
+      port_mux: "enp0s1f0d2"
+      vrf_mux: "enp0s1f0d3"
+      grpc_acc: "enp0s1f0d1"
+      grpc_host: "00:10:00:01:03:18"
+      phy0_rep: "enp0s1f0d2"
+      phy1_rep: "enp0s1f0d3"
+    config:
+      p4info_file: ../../linux_network.p4info.txt
+      bin_file: ../../linux_network_acc.pb.bin
