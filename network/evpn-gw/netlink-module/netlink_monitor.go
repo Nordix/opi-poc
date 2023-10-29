@@ -66,24 +66,11 @@ type Config_t struct {
 	} `yaml:"netlink"`
 }
 
-type Direction int
 
-
-func run(cmd []string) (string, error) {
-        var out []byte
-        var err error
-        out, err = exec.Command("sudo",cmd...).Output()
-        if err != nil {
-                log.Println(cmd)
-                return "",err
-        }
-        output := string(out[:])
-        return output,err
-}
 
 
 const ( // Route direction
-	None_ Direction = iota
+	None_ int = iota
 	RX
 	TX
 	RX_TX
@@ -166,22 +153,17 @@ var	LatestNeighbors = make(map[Neigh_key]Neigh_Struct)
 var     LatestFDB  =  make(map[FDB_key]FdbEntry_struct)
 var	LatestL2Nexthop = make(map[L2Nexthop_key]L2Nexthop_struct)
 
-type NetlinkDB struct {
-	 
-
-
+func run(cmd []string) (string, error) {
+        var out []byte
+        var err error
+        out, err = exec.Command("sudo",cmd...).Output()
+        if err != nil {
+                log.Println(cmd)
+                return "",err
+        }
+        output := string(out[:])
+        return output,err
 }
-
-type Ri func(int /* V: ipu_db*/, map[string]string)
-type Genfunc func()
-
-
-/*
-type Route struct {
-	Route_init   *Ri
-	Route_common Commonfp
-}
-*/
 
 /*--------------------------------------------------------------------------
 ###  Route Database Entries
@@ -215,16 +197,7 @@ type Route_struct struct {
 type Route_list struct {
 	RS []Route_struct
 }
-/*
-type NexthopInfo struct {
-	LinkIndex int
-	Hops      int
-	Gw        net.IP
-	Flags     int
-	NewDst    Destination
-	Encap     Encap
-}
-*/
+
 type Nexthop_struct struct {
 	NH netlink.NexthopInfo  
 	Vrf Vrf
@@ -382,7 +355,6 @@ func NH_parse(V Vrf ,Nh Route_cmd_info)  Nexthop_struct {
 		if !reflect.ValueOf(Nh.Weight).IsZero() {
 			nh.Weight= Nh.Weight
 		}
-//	}
 	nh.Key = Nexthop_key{nh.Vrf.Name, nh.NH.Gw.String(), nh.NH.LinkIndex, nh.Local}
 	return nh
 }
@@ -417,7 +389,7 @@ func check_proto(proto int) bool {
 	return false	
 }
 
-func (route Route_struct) annotate(){
+func (route Route_struct) annotate() Route_struct{
 	route.Metadata = make(map[interface{}]interface{})
 	for i := 0; i < len(route.Nexthops); i++ {
 		NH := route.Nexthops[i]
@@ -425,7 +397,7 @@ func (route Route_struct) annotate(){
 		route.Metadata["nh_ids"] = NH.Id
 	}
 	if route.Vrf.Vni != 0 {
-		route.Metadata["vrf_id"] = string(route.Vrf.Vni)
+		route.Metadata["vrf_id"] = route.Vrf.Vni
 	} else {
 		route.Metadata["vrf_id"] = ""
 	}
@@ -433,24 +405,25 @@ func (route Route_struct) annotate(){
 		NH := route.Nexthops[0]
 		if route.Vrf.Vni != 0{ // GRD
 			if NH.Nh_type == PHY{
-				route.Metadata["direction"] = string(TX)
+				route.Metadata["direction"] = TX
 			} else if NH.Nh_type == ACC{
-				route.Metadata["direction"] = string(RX)
+				route.Metadata["direction"] = RX
 			} else { 
-				route.Metadata["direction"] = "NONE"
+				route.Metadata["direction"] = None_
 			}
 		} else {
 			if NH.Nh_type == VXLAN{
-				route.Metadata["direction"] = string(TX)
+				route.Metadata["direction"] = TX
 			} else if (NH.Nh_type == SVI || NH.Nh_type == ACC){
-				route.Metadata["direction"] = string(RX_TX)
+				route.Metadata["direction"] = RX_TX
 			} else {
-				route.Metadata["direction"] = "NONE"
+				route.Metadata["direction"] = None_
 			}
 		}
 	} else {
-		route.Metadata["direction"] = "NONE"
+		route.Metadata["direction"] = None_
 	}
+	return route
 }
 
 
@@ -593,36 +566,9 @@ func comparekey(i, j int) bool {
 /*--------------------------------------------------------------------------
 ###  Nexthop_struct Database Entries
 --------------------------------------------------------------------------*/
-/*
-func Nexthop_init(vrf Vrf, dst string, dev string, Local bool, weight int, flags string) Nexthop_struct{
-	var NH Nexthop_struct
-	NH.vrf = vrf
-        NH.dst = dst
-        NH.dev = dev
-        NH.Local = local
-	NH.NH_key.VRF_name=vrf.Name
-	NH.NH_key.dst= dst
-	NH.NH_key.dev=dev
-	NH.NH_key.Local=local
-        NH.weight = weight
-        NH.flags = flags
-        NH.Id = 0                            // Defined if and only if Nexthop_struct in DB
-        NH.route_refs = nil
-        NH.Resolved = (!reflect.ValueOf(dst).IsZero())       // Nexthop_structs with a dst IP need resolution
-     //   NH.neighbor = 0
-        NH.Nh_type = "other"
-        NH.Metadata =  nil
-	return NH
-}
-*/
-//type Assign_id func()
+
 type Try_resolve func(map[string]string)
 
-/*type Nexthop_struct struct {
-	Nethop_init  *Ni
-	try_resolve  *Try_resolve
-	Route_common Commonfp
-}*/
 
 /*--------------------------------------------------------------------------
 ###  Bridge MAC Address Database
@@ -811,16 +757,26 @@ func read_latest_netlink_state() {
 }
 
 func dump_DBs(){
-	dump_RouteDB()
+	file, err := os.OpenFile("netlink_dump", os.O_WRONLY|os.O_CREATE, 0644)
+	if err != nil {
+		panic(err)
+	}
+	if err := os.Truncate("netlink_dump", 0); err != nil {
+	       log.Printf("Failed to truncate: %v", err)
+	}	
+	//defer file.Close()
+	str := dump_RouteDB()
 	log.Printf("\n")
-	dump_NexthDB()
+	str = str + dump_NexthDB()
 	log.Printf("\n")
-	dump_neighDB()
+	str = str + dump_neighDB()
 	log.Printf("\n")
-	dump_FDB()
+	str = str + dump_FDB()
 	log.Printf("\n")
-	dump_L2NexthDB()
-	
+	str = str +dump_L2NexthDB()
+	file.WriteString(str)
+	file.Close()
+
 }
 
 func ensureIndex(link *netlink.LinkAttrs) {
@@ -960,9 +916,11 @@ func  print_Neigh(Ng *Neigh_Struct)string{
 		return str
 }
 
-func dump_RouteDB() {
+func dump_RouteDB()string {
+	        var s  string
 		log.Printf("len %d\n",len(LatestRoutes))
 		log.Printf("Route table:\n")
+		s = "Route table:\n"
 		for _, n := range LatestRoutes {
 			var via string
 			if  n.Route0.Gw.String()=="<nil>" {
@@ -972,14 +930,20 @@ func dump_RouteDB() {
 			}
 			str := fmt.Sprintf("Route(vrf=%s dst=%s type=%s proto=%s metric=%d  via=%s dev=%s nhid= %d Table= %d)",n.Vrf.Name, n.Route0.Dst.String(),n.Nl_type, get_proto(n),n.Route0.Priority,via,Name_index[n.Route0.LinkIndex],n.Nexthops[0].Id,n.Route0.Table)
 			log.Println(str)
+			s +=str
+			s += "\n"
 		}
 		log.Printf("\n\n\n")
+		s +="\n\n"
+		return s
 	}
-	
 
-func dump_L2NexthDB(){
+
+func dump_L2NexthDB()string{
+	var s  string
 	log.Printf("L2 Nexthop table:\n")
 	log.Printf("len %d\n",len(LatestL2Nexthop))
+	s = "L2 Nexthop table:\n"
 	var ip string
 	for _, n := range LatestL2Nexthop {
 		 if  n.Dst.String()=="<nil>" {
@@ -989,32 +953,50 @@ func dump_L2NexthDB(){
                 }
 		 str := fmt.Sprintf("L2Nexthop(id=%d dev=%s vlan=%d dst=%s type=%d #FDB entries=%d Resolved=%t) ",n.Id,n.Dev,n.Vlan_id,ip,n.Type,len(n.Fdb_refs),n.Resolved)
                 log.Println(str)
+		s +=str
+		s += "\n"
 	}
 	log.Printf("\n\n\n")
+	s +="\n\n"
+	return s
 }
 
-func dump_FDB(){
+func dump_FDB()string{
+	var s  string
 	log.Printf("FDB table:\n")
 	log.Printf("len %d\n",len(LatestFDB))
+	s = "FDB table:\n"
 	for _, n := range LatestFDB {
 		 str := fmt.Sprintf("MacAddr(vlan=%d mac=%s state=%s type=%d l2nh_id=%d) ",n.Vlan_id,n.Mac,n.State,n.Type,n.Nexthop.Id)
-                log.Println(str)
+               log.Println(str)
+	       s +=str
+	       s += "\n"
 	}
 	log.Printf("\n\n\n")
+	s +="\n\n"
+	return s
 }
-func dump_NexthDB(){
+func dump_NexthDB() string{
+	var s  string
 	log.Printf("Nexthop table:\n")
+	s = "Nexthop table:\n"
 	log.Printf("len %d\n",len(LatestNexthop))
 	for _, n := range LatestNexthop {
 		 str := fmt.Sprintf("Nexthop(id=%d vrf=%s dst=%s dev=%s Local=%t weight=%d flags=[%s] #routes=%d Resolved=%t neighbor=%s) ",n.Id,n.Vrf.Name,n.NH.Gw.String(),Name_index[n.NH.LinkIndex],n.Local,n.Weight,get_flag_string(n.NH.Flags),len(n.Route_refs),n.Resolved,print_Neigh(n.Neighbor))
                 log.Println(str)
+		s +=str
+	        s += "\n"
 	}
 	log.Printf("\n\n\n")
+	s +="\n\n"
+	return s
 }
 
 
-func dump_neighDB() {
+func dump_neighDB() string{
+	var s  string
 	log.Printf("Neighbor table:\n")
+	s="Neighbor table:\n"
 	log.Printf("len %d\n",len(LatestNeighbors))
 	for _, n := range LatestNeighbors {
 		var Proto string
@@ -1025,7 +1007,11 @@ func dump_neighDB() {
 		}
 		str := fmt.Sprintf("Neighbor(vrf=%s dst=%s lladdr=%s dev=%s proto=%s state=%s Type : %d) ",n.Vrf_name,n.Neigh0.IP.String(),n.Neigh0.HardwareAddr.String(),Name_index[n.Neigh0.LinkIndex],Proto,get_state_str(n.Neigh0.State),n.Type)
 		log.Println(str)
+		s +=str
+	        s += "\n"
     }
+    s +="\n\n"
+    return s
 }
 
 func get_proto(n Route_struct) string{
@@ -1304,7 +1290,8 @@ func read_neighbors(V Vrf) {
 		}
 	*/
 	}
-	if len(Nb)!= 3 || err == nil {
+	if len(Nb) != 3 && err == nil {
+		//fmt.Println("In IF---",Nb,len(Nb))
 		N =cmd_process_Nb(Nb,V.Name)
 	}
 	add_neigh(N)
@@ -1414,345 +1401,49 @@ func read_routes(V Vrf) {
 //	dump_RouteDB()
 }
 
-func notify_route_added(R Route_struct){
-//      log.Printf("Notify Route: Adding {%+v)\n",R)
-
-        EventBus.Publish("route_added", R)
-}
-
-func notify_route_deleted(R Route_struct){
-//      log.Printf("Notify: Route: Deleting {%+v}\n",R)
-        EventBus.Publish("route_deleted", R)
-}
-
-func notify_route_updated(new_R Route_struct, old_R Route_struct){
-//      log.Printf("Notify: Route Replacing new {%+v} old {%+v}\n",new_R,old_R)
-        EventBus.Publish("route_updated", new_R)
-}
-
-func notify_nexthop_added(NH Nexthop_struct){
-//      log.Printf("Notify: Nexthop Adding {%+v}\n",NH)
-        EventBus.Publish("nexthop_added", NH)
-}
-
-func notify_nexthop_deleted( NH Nexthop_struct){
-//      log.Printf("Notify: Nexthop Deleting {%+v}\n",NH)
-        EventBus.Publish("nexthop_deleted", NH)
-}
-
-func notify_nexthop_updated(new_NH Nexthop_struct, old_NH Nexthop_struct){
-//      log.Printf("Notify: Nexthop Replacing old {%+v} with {%+v}\n",old_NH,new_NH)
-        EventBus.Publish("nexthop_updated", new_NH)
+func notify_add_del(R interface{},event string){
+	fmt.Printf("Notify event: %s\n",event)
+  EventBus.Publish(event, R)
 }
 
 
-func notify_fdb_added(M FdbEntry_struct){
-//	log.Println("Notify: Adding {M.format()}.")
-	EventBus.Publish("fdb_entry_added", M)
+func notify_updated(newR interface{}, old interface{},event string){
+	fmt.Printf("Notify event: %s\n",event)
+    EventBus.Publish(event, newR)
 }
 
-func notify_fdb_deleted(M FdbEntry_struct){
-//    log.Println("Notify: Deleting {M.format()}.")
-	EventBus.Publish("fdb_entry_deleted", M)
-}
+var notify_events = []string{"_added","_updated","_deleted"}
 
-func notify_fdb_updated(new_M FdbEntry_struct, old_M FdbEntry_struct){
-//    log.Println("Notify: Replacing {old.format()} with {new.format()}.")
-	EventBus.Publish("fdb_entry_updated", new_M)
-}
-func notify_L2nexthop_added(L2N L2Nexthop_struct){
-//    log.Println("Notify: Adding {L2N.format()}.")
-	EventBus.Publish("l2_nexthop_added", L2N)
-}
-
-func notify_L2nexthop_deleted(L2N L2Nexthop_struct){
-//    log.Println("Notify: Deleting {L2N.format()}.")
-	EventBus.Publish("l2_nexthop_delete", L2N)
-}
-
-func notify_L2nexthop_updated(new_L2N L2Nexthop_struct, old_L2N L2Nexthop_struct){
-//	log.Println("Notify: Replacing {old.format()} with {new.format()}.")
-	EventBus.Publish("l2_nexthop_updated", new_L2N)
-}
-
-func get_routes_changes(R1 []Route_key, R2 []Route_key,new_db map[Route_key]Route_struct, old_db map[Route_key]Route_struct,mod bool)([]Route_struct,[]Route_struct) {
-	var old_route []Route_struct 
-	var new_route []Route_struct
-	var r2key Route_key
-	var route_changes []Route_struct
-	for _,r1_key := range R1 {
-		change_flag := false
-		mod_flag := false
-		for _,r2_key := range R2 {
-			if reflect.DeepEqual(r1_key,r2_key) {
-				if mod == true{
-					if !reflect.DeepEqual(new_db[r1_key],old_db[r2_key]) && new_db[r1_key].Nl_type == "neighbor" {
-						log.Printf("mod DIfference route: new\n %+v \n\n old\n  %+v\n\n\n",new_db[r1_key],old_db[r2_key])
-						//log.Printf("new Type %s and VRF %s\n old Type %s and VRF %s\n",new_db[r1_key].nl_type,new_db[r1_key].vrf.Name,old_db[r2_key].nl_type,old_db[r2_key].vrf.Name )
-						mod_flag =true
-					} else {
-						//log.Printf("mod SAME route: new\n %+v \n\n old\n  %+v\n\n\n",new_db[r1_key],old_db[r2_key])
-					}
-				} else {
-					change_flag = true
-				}
-			r2key = r2_key
-			break
-			}
-		}
-		if !mod && !change_flag {
-			route_changes = append(route_changes,new_db[r1_key])
-		}
-		if mod && mod_flag {
-			old_route = append(old_route,old_db[r2key])
-			new_route = append(new_route,new_db[r1_key])
-			mod_flag = false
-		}
-	}
-	if mod {
-		return new_route , old_route
-	} else {
-		return route_changes, nil
-	}
-}
-
-func notify_route_changes(new_db map[Route_key]Route_struct, old_db map[Route_key]Route_struct) {
-	var old_keys []Route_key
-	var new_keys []Route_key
-	for  k , _ :=range old_db{
-		old_keys = append(old_keys,k)	
-	} 
-	for  k , _ :=range new_db{
-		new_keys = append(new_keys,k)	
-	}
-	if len(new_keys)- len(old_keys) > 0{   // ADDED
-		log.Printf("Added new route len %d old route len %d\n",len(new_keys),len(old_keys))
-		Added_routes,_ := get_routes_changes(new_keys,old_keys,new_db,old_db,false)
-		if len(Added_routes) != 0{
-			for _,R := range Added_routes{
-				notify_route_added(R)	
-			}	
-		}
-	} else if len(new_keys)- len(old_keys) < 0 { // DELETED
-		log.Printf("Deleted :new route len %d old route len %d\n",len(new_keys),len(old_keys))
-		Deleted_routes,_ := get_routes_changes(old_keys,new_keys,new_db,old_db,false)
-		if len(Deleted_routes) != 0{
-			for _,R := range Deleted_routes{
-				notify_route_deleted(R)	
-			}	
-		}
-	} else if len(new_keys)- len(old_keys) == 0 {
-		if !reflect.DeepEqual(new_db, old_db) {  // UPDATED
-			//log.Printf("Updated :new route len %d old route len %d old: %+v \n new :%+v\n",len(new_keys),len(old_keys),old_keys,new_keys)
-			new_routes,old_routes := get_routes_changes(new_keys,old_keys,new_db,old_db,true)
-			if len(new_routes) != 0 && len(old_routes)!=0 {
-				for i:=0;i<len(new_routes);i++ {
-					notify_route_updated(new_routes[i],old_routes[i])
-				}
-			}
-		} else {
-			log.Printf("No changes noticed in route DB\n")
-		}
-	}
-}
-
-
-func get_fdb_changes(R1 []FDB_key, R2 []FDB_key,new_db map[FDB_key]FdbEntry_struct, old_db map[FDB_key]FdbEntry_struct,mod bool)([]FdbEntry_struct,[]FdbEntry_struct) {
-	var old_fdb []FdbEntry_struct
-	var new_fdb []FdbEntry_struct
-	var r2key FDB_key
-	var fdb_changes []FdbEntry_struct
-	for _,r1_key := range R1 {
-		change_flag := false
-		mod_flag := false
-		for _,r2_key := range R2 {
-			if reflect.DeepEqual(r1_key,r2_key) {
-				if mod == true{
-					if !reflect.DeepEqual(new_db[r1_key],old_db[r2_key]) {
-						log.Printf("mod DIfference route: new\n %+v \n\n old\n  %+v\n\n\n",new_db[r1_key],old_db[r2_key])
-						//fmt.Printf("new Type %s and VRF %s\n old Type %s and VRF %s\n",new_db[r1_key].nl_type,new_db[r1_key].vrf.Name,old_db[r2_key].nl_type,old_db[r2_key].vrf.Name )
-						mod_flag =true
-					}	
-				} else {
-					change_flag = true
-				}
-			r2key = r2_key
-			break
-			}
-		}
-		if !mod && !change_flag {
-			fdb_changes = append(fdb_changes,new_db[r1_key])
-		}
-		if mod && mod_flag {
-			old_fdb = append(old_fdb,old_db[r2key])
-			new_fdb = append(new_fdb,new_db[r1_key])
-			mod_flag = false
-		}
-	}
-	if mod {
-		return new_fdb , old_fdb
-	} else {
-		return fdb_changes, nil
-	}
-}
-
-func notify_FDB_changes(new_db map[FDB_key]FdbEntry_struct, old_db map[FDB_key]FdbEntry_struct) {
-        var old_keys []FDB_key
-        var new_keys []FDB_key
-        for  k , _ :=range old_db{
-                old_keys = append(old_keys,k)
+func notify_changes(new_db map[interface{}]interface{}, old_db map[interface{}]interface{},event []string ) {
+	var DB1,DB2 = make(map[interface{}]interface{}),make(map[interface{}]interface{})
+	if len(new_db) < len(old_db){
+            DB1 = new_db
+            DB2 = old_db
         }
-        for  k , _ :=range new_db{
-                new_keys = append(new_keys,k)
+        if len(new_db) >= len(old_db){
+            DB2 = old_db
+            DB1 = new_db
         }
-        if len(new_keys)- len(old_keys) > 0{   // ADDED
-                log.Printf("Added new FDB len %d old FDB len %d\n",len(new_keys),len(old_keys))
-                Added_FDBs,_ := get_fdb_changes(new_keys,old_keys,new_db,old_db,false)
-                if len(Added_FDBs) != 0{
-                        for _,R := range Added_FDBs{
-                                notify_fdb_added(R)
-                        }
-                }
-        } else if len(new_keys)- len(old_keys) < 0 { // DELETED
-                log.Printf("Deleted :new FDB len %d old FDB len %d\n",len(new_keys),len(old_keys))
-                Deleted_fdb,_ := get_fdb_changes(old_keys,new_keys,new_db,old_db,false)
-                if len(Deleted_fdb) != 0{
-                        for _,R := range Deleted_fdb{
-                                notify_fdb_deleted(R)
-                        }
-                }
-        } else if len(new_keys)- len(old_keys) == 0 {
-                if !reflect.DeepEqual(new_db, old_db) {  // UPDATED
-                        log.Printf("Updated :new route len %d old route len %d old: %+v \n new :%+v\n",len(new_keys),len(old_keys),old_keys,new_keys)
-                        new_fdb,old_fdb := get_fdb_changes(new_keys,old_keys,new_db,old_db,true)
-                        if len(new_fdb) != 0 && len(old_fdb)!=0 {
-                                for i:=0;i<len(new_fdb);i++ {
-                                        notify_fdb_updated(new_fdb[i],old_fdb[i])
-                                }
-                        }
-                } else {
-                        log.Printf("No changes noticed in route DB\n")
-                }
+	for k1,v1 := range DB1{
+            for k2,v2 := range DB2 {
+                 if k1 == k2 {
+			 if !reflect.DeepEqual(v1, v2) { //&& v1.Nl_type == "neighbor"{
+                            notify_updated(v1,v2,event[1])
+			 }
+                         delete(new_db,k1)
+                         delete(old_db,k2)
+                         break
+                  }
+            }
+        }
+
+	for _,R:= range new_db{
+            notify_add_del(R,event[0])
+        }
+        for _,R:= range old_db{
+            notify_add_del(R,event[2])
         }
 }
-
-
-func get_L2Nexthop_changes(R1 []L2Nexthop_key, R2 []L2Nexthop_key,new_db map[L2Nexthop_key]L2Nexthop_struct, old_db map[L2Nexthop_key]L2Nexthop_struct,mod bool)([]L2Nexthop_struct,[]L2Nexthop_struct) {
-	var old_l2nexthop []L2Nexthop_struct
-	var new_l2nexthop []L2Nexthop_struct
-	var r2key L2Nexthop_key
-	var l2nexthop_changes []L2Nexthop_struct
-	for _,r1_key := range R1 {
-		change_flag := false
-		mod_flag := false
-		for _,r2_key := range R2 {
-			if reflect.DeepEqual(r1_key,r2_key) {
-				if mod == true{
-					if !reflect.DeepEqual(new_db[r1_key],old_db[r2_key]) {
-						log.Printf("mod DIfference route: new\n %+v \n\n old\n  %+v\n\n\n",new_db[r1_key],old_db[r2_key])
-						//fmt.Printf("new Type %s and VRF %s\n old Type %s and VRF %s\n",new_db[r1_key].nl_type,new_db[r1_key].vrf.Name,old_db[r2_key].nl_type,old_db[r2_key].vrf.Name )
-						mod_flag =true
-					}
-				} else {
-					change_flag = true
-				}
-			r2key = r2_key
-			break
-			}
-		}
-		if !mod && !change_flag {
-			l2nexthop_changes = append(l2nexthop_changes,new_db[r1_key])
-		}
-		if mod && mod_flag {
-			old_l2nexthop = append(old_l2nexthop,old_db[r2key])
-			new_l2nexthop = append(new_l2nexthop,new_db[r1_key])
-			mod_flag = false
-		}
-	}
-	if mod {
-		return new_l2nexthop , old_l2nexthop
-	} else {
-		return l2nexthop_changes, nil
-	}
-}
-
-func notify_L2nexthop_changes(new_db map[L2Nexthop_key]L2Nexthop_struct, old_db map[L2Nexthop_key]L2Nexthop_struct) {
-	var old_keys []L2Nexthop_key
-	var new_keys []L2Nexthop_key
-	for  k , _ :=range old_db{
-		old_keys = append(old_keys,k)	
-	} 
-	for  k , _ :=range new_db{
-		new_keys = append(new_keys,k)	
-	}
-	if len(new_keys)- len(old_keys) > 0{   // ADDED
-		log.Printf("Added new L2Nexthop len %d old L2Nexthop len %d\n",len(new_keys),len(old_keys))
-		Added_L2Nexthop,_ := get_L2Nexthop_changes(new_keys,old_keys,new_db,old_db,false)
-		if len(Added_L2Nexthop) != 0{
-			for _,R := range Added_L2Nexthop{
-				notify_L2nexthop_added(R)	
-			}	
-		}
-	} else if len(new_keys)- len(old_keys) < 0 { // DELETED
-		log.Printf("Deleted :new L2Nexthop len %d old L2Nexthop len %d\n",len(new_keys),len(old_keys))
-		Deleted_L2Nexthop,_ := get_L2Nexthop_changes(old_keys,new_keys,new_db,old_db,false)
-		if len(Deleted_L2Nexthop) != 0{
-			for _,R := range Deleted_L2Nexthop{
-				notify_L2nexthop_deleted(R)	
-			}	
-		}
-	} else if len(new_keys)- len(old_keys) == 0 {
-		if !reflect.DeepEqual(new_db, old_db) {  // UPDATED
-			log.Printf("Updated :new route len %d old route len %d old: %+v \n new :%+v\n",len(new_keys),len(old_keys),old_keys,new_keys)
-			new_L2Nexthop,old_L2Nexthop := get_L2Nexthop_changes(new_keys,old_keys,new_db,old_db,true)
-			if len(new_L2Nexthop) != 0 && len(old_L2Nexthop)!=0 {
-				for i:=0;i<len(new_L2Nexthop);i++ {
-					notify_L2nexthop_updated(new_L2Nexthop[i],old_L2Nexthop[i])
-				}
-			}
-		} else {
-			log.Printf("No changes noticed in route DB\n")
-		}
-	}
-}
-
-
-func get_nexthop_changes(R1 []Nexthop_key, R2 []Nexthop_key,new_db map[Nexthop_key]Nexthop_struct, old_db map[Nexthop_key]Nexthop_struct,mod bool)([]Nexthop_struct,[]Nexthop_struct) {
-	var old_nexthop []Nexthop_struct 
-	var new_nexthop []Nexthop_struct
-	var nexthop_changes []Nexthop_struct
-	var n2key Nexthop_key
-	for _,n1_key := range R1 {
-		change_flag := false
-		mod_flag := false  	
-		for _,n2_key := range R2 {
-			if reflect.DeepEqual(n1_key,n2_key) {
-				if mod == true{
-					if !reflect.DeepEqual(new_db[n1_key],old_db[n2_key]){
-						mod_flag =true
-						n2key = n2_key
-					}
-				} else {
-						change_flag = true
-				}
-			break
-			}
-		}
-		if !mod && !change_flag {	 
-			nexthop_changes = append(nexthop_changes,new_db[n1_key])
-		}
-		if mod && mod_flag {
-			old_nexthop = append(old_nexthop,old_db[n2key])
-			new_nexthop = append(new_nexthop,new_db[n1_key])
-			mod_flag = false
-		}
-	}
-	if mod {
-		return new_nexthop , old_nexthop
-	} else {
-		return nexthop_changes,nil
-	}	
-} 
 
 func read_FDB() []FdbEntry_struct{
         var fdbs []Fdb_IP_Struct
@@ -1782,43 +1473,6 @@ func read_FDB() []FdbEntry_struct{
         return macs
 }
 
-
-
-func notify_nexthop_changes(new_db map[Nexthop_key]Nexthop_struct,old_db map[Nexthop_key]Nexthop_struct ){
-	var old_keys []Nexthop_key
-	var new_keys []Nexthop_key
-	for  k , _ :=range old_db{
-		old_keys = append(old_keys,k)	
-	} 
-	for  k , _ :=range new_db{
-		new_keys = append(new_keys,k)	
-	}
-	if len(new_keys)- len(old_keys) > 0{   // ADDED
-		Added_nexthops,_ := get_nexthop_changes(new_keys,old_keys,new_db,old_db,false)
-		if len(Added_nexthops) != 0{
-			for _,R := range Added_nexthops{
-				notify_nexthop_added(R)	
-			}	
-		}
-	} else if len(new_keys)- len(old_keys) < 0{ // DELETED
-		Deleted_nexthop,_ := get_nexthop_changes(old_keys,new_keys,new_db,old_db,false)
-		if len(Deleted_nexthop) != 0{
-				for _,R := range Deleted_nexthop{
-					notify_nexthop_deleted(R)	
-				}	
-		}
-	} else  if len(new_keys)- len(old_keys) == 0{
-			if !reflect.DeepEqual(new_db, old_db) {  // UPDATED
-				new_nexthop,old_nexthop := get_nexthop_changes(new_keys,old_keys,new_db,old_db,true)
-			if len(new_nexthop) != 0 && len(old_nexthop)!=0 {
-				for i:=0;i<len(new_nexthop);i++ {
-					notify_nexthop_updated(new_nexthop[i],old_nexthop[i])	
-				}	
-			}
-		} else {
-		}
-	}
-}
 
 func lookup_route(dst net.IP, V Vrf)Route_struct{
 	// FIXME: If the semantic is to return the current entry of the NetlinkDB
@@ -1861,7 +1515,7 @@ func lookup_route(dst net.IP, V Vrf)Route_struct{
 	}	
 }
 
-func (nexthop Nexthop_struct)annotate() {
+func (nexthop Nexthop_struct)annotate() Nexthop_struct{
 	    nexthop.Metadata=make(map[interface{}]interface{})
 	if (!reflect.ValueOf(nexthop.NH.Gw).IsZero()) && nexthop.NH.LinkIndex != 0 && strings.HasPrefix(Name_index[nexthop.NH.LinkIndex], nexthop.Vrf.Name+"-") && !nexthop.Local {
 		nexthop.Nh_type = SVI
@@ -1903,7 +1557,7 @@ func (nexthop Nexthop_struct)annotate() {
 		}
 		//nexthop.Metadata["Local_vtep_ip"] = nexthop.vrf.Vtep
                 nexthop.Metadata["remote_vtep_ip"] = nexthop.NH.Gw.String()
-                nexthop.Metadata["vni"] = string(nexthop.Vrf.Vni)
+                nexthop.Metadata["vni"] = nexthop.Vrf.Vni
                 if (!reflect.ValueOf(nexthop.Neighbor).IsZero()){
 				//if nexthop.neighbor.Type == SVI{
 				nexthop.Metadata["inner_dmac"] = nexthop.Neighbor.Neigh0.HardwareAddr.String()
@@ -1934,18 +1588,20 @@ func (nexthop Nexthop_struct)annotate() {
 			//return ""
 		}
 		nexthop.Metadata["dmac"] = link1.Attrs().HardwareAddr.String()
-		nexthop.Metadata["egress_vport"] = string(0xa) //ipu_db.vport_id_from_mac_address(mac)
+		nexthop.Metadata["egress_vport"] = 0xa //ipu_db.vport_id_from_mac_address(mac)
 		if (reflect.ValueOf(nexthop.Vrf.Vni).IsZero()){
-			nexthop.Metadata["vlan_id"] = string(4089)
+			nexthop.Metadata["vlan_id"] = uint32(4089)
 		} else {
-			nexthop.Metadata["vlan_id"] = string(nexthop.Vrf.Vni)
+			nexthop.Metadata["vlan_id"] = nexthop.Vrf.Vni
 		}
 	}
-	log.Printf("METADATA %+v\n",nexthop.Metadata)
-	//return ""
+	//log.Printf("METADATA %+v\n",nexthop.Metadata)
+	//fmt.Println("---Nexthop_struct)annotate()--- NHTYPE___",nexthop.Nh_type)
+	//fmt.Printf("---Nexthop_struct)annotate()--- -METADATA ",nexthop.Metadata)
+	return nexthop
 }
 
-func (L2N L2Nexthop_struct) annotate(){
+func (L2N L2Nexthop_struct)annotate() (L2Nexthop_struct){
         // Annotate certain L2 Nexthops with additional information from LB and GRD
 	// TODO
 	//LB := L2N.lb
@@ -1981,7 +1637,6 @@ func (L2N L2Nexthop_struct) annotate(){
 					L2N.Metadata["phy_dmac"] = phy_nh.Neighbor.Neigh0.HardwareAddr.String()
 				} else {
 					log.Printf("Error: Neighbor type not PHY\n")
-					return
 				}
 				L2N.Resolved = false
 			}
@@ -1993,11 +1648,12 @@ func (L2N L2Nexthop_struct) annotate(){
 	}
 //}	
 	//print(f"Annotated {self}: extra={self.metadata}")
+	return L2N
 }
 
-func (fdb FdbEntry_struct) annotate(){
+func (fdb FdbEntry_struct)annotate() FdbEntry_struct{
 	if fdb.Vlan_id == 0{
-		return
+		return fdb
 	}
 	//TODO
 	//if not self.lb: return
@@ -2023,23 +1679,29 @@ func (fdb FdbEntry_struct) annotate(){
 	    //TODO
 	    //logger.debug(f"Annotated {self}: extra={self.Metadata}")
         }
+	return fdb
 }
 
 
 func annotate_db_entries(){
 	
 	for _,NH := range LatestNexthop{
-		NH.annotate()
+		NH = NH.annotate()
+		LatestNexthop[NH.Key] = NH
+		//fmt.Println("inside annotate_db_entries----LatestNexthop---", NH.Metadata)
 	}	
 	for _,R := range LatestRoutes{
-		R.annotate()
+		R = R.annotate()
+		LatestRoutes[R.Key] = R
 	}	
 
 	for _,M := range LatestFDB{
-		M.annotate()
+		M = M.annotate()
+		LatestFDB[M.Key] = M
 	}	
 	for _,L2N := range LatestL2Nexthop{
-		L2N.annotate()
+		L2N = L2N.annotate()
+		LatestL2Nexthop[L2N.Key] = L2N
 	}	
 
 }
@@ -2092,15 +1754,15 @@ func install_filter_FDB(fdb FdbEntry_struct) bool{
         // Drop entries w/o VLAN ID or associated LogicalBridge ...
         // ... other than with L2 nexthops of type VXLAN and BridgePort ...
         // ... and VXLAN entries with unresolved underlay nextop.
-        keep := reflect.ValueOf(fdb.Vlan_id).IsZero() && /*reflect.ValueOf(fdb.lb).IsZero() &&*/ check_fdb_type(fdb.Type) && fdb.Nexthop.Resolved
+        keep := !reflect.ValueOf(fdb.Vlan_id).IsZero() && /*reflect.ValueOf(fdb.lb).IsZero() && */ check_fdb_type(fdb.Type) && fdb.Nexthop.Resolved
         if keep == false{
-        //    log.Printf("install_filter: dropping {%v}",fdb)
+            log.Printf("install_filter: dropping {%v}",fdb)
         }
         return keep
 }
 
 func install_filter_L2N(l2n L2Nexthop_struct) bool {
-        keep := (reflect.ValueOf(l2n.Type).IsZero() && l2n.Resolved == true  && reflect.ValueOf(l2n.Fdb_refs).IsZero())
+        keep := !(reflect.ValueOf(l2n.Type).IsZero() && l2n.Resolved == true  && reflect.ValueOf(l2n.Fdb_refs).IsZero())
         if keep == false{
     //        log.Printf("install_filter FDB: dropping {%+v}",l2n)
         }
@@ -2117,23 +1779,93 @@ func apply_install_filters(){
 	}
 
 	for k, NH := range LatestNexthop{
-		if install_filter_NH(NH){
+		if (install_filter_NH(NH)!=true){
 		     delete(LatestNexthop,k)
 		}
 	}
 
 	for k, M := range LatestFDB{
-		if install_filter_FDB(M){
+		if (install_filter_FDB(M)==true){   // TODO Making "== true" (Original != ture) fix it later once InfraDB is ready 
 		     delete(LatestFDB,k)
 		}
 	}
 	for k, L2 := range LatestL2Nexthop{
-		if ! install_filter_L2N(L2){
+		if (install_filter_L2N(L2)!=true){
 			delete(LatestL2Nexthop,k)
 		}
 	}
 
 }
+
+var oldgenmap=make(map[interface{}]interface{})
+var latestgenmap=make(map[interface{}]interface{})
+
+func notify_db_changes() {
+	var route_event_str []string
+	var nexthop_event_str []string
+	var fdb_event_str  []string
+	var l2nexthop_event_str []string
+	for _,s := range notify_events {
+		route_event_str = append(route_event_str,"route"+s)
+		nexthop_event_str = append(nexthop_event_str,"nexthop"+s)
+		fdb_event_str = append(fdb_event_str,"fdb_entry"+s)
+		l2nexthop_event_str = append(l2nexthop_event_str,"l2_nexthop"+s)
+	}
+	type Nl_db_copy struct {
+		RDB  map[Route_key]Route_struct
+		NDB map[Nexthop_key]Nexthop_struct
+		FBDB map[FDB_key]FdbEntry_struct
+		L2NDB map[L2Nexthop_key]L2Nexthop_struct
+	}
+	latestdb := Nl_db_copy{RDB: LatestRoutes, NDB:LatestNexthop, FBDB:LatestFDB, L2NDB: LatestL2Nexthop}
+	olddb := Nl_db_copy{RDB: Routes, NDB:Nexthops, FBDB:FDB, L2NDB: L2Nexthops}
+	var event_str []interface{}
+	event_str = append(event_str,route_event_str)
+	event_str = append(event_str,nexthop_event_str)
+	event_str = append(event_str,fdb_event_str)
+	event_str = append(event_str,l2nexthop_event_str)
+	//Routes
+	oldgenmap=make(map[interface{}]interface{})
+	latestgenmap=make(map[interface{}]interface{})
+	for k,v := range latestdb.RDB{ //(map[Route_key]Route_struct) {
+		latestgenmap[k] =v
+	}
+	for k,v := range olddb.RDB{
+		oldgenmap[k] =v
+	}
+	notify_changes(latestgenmap, oldgenmap,event_str[0].([]string))
+	// Nexthops
+	oldgenmap=make(map[interface{}]interface{})
+	latestgenmap=make(map[interface{}]interface{})
+	for k,v := range latestdb.NDB{ //(map[Route_key]Route_struct) {
+		latestgenmap[k] =v
+	}
+	for k,v := range olddb.NDB{
+		oldgenmap[k] =v
+	}
+	notify_changes(latestgenmap, oldgenmap,event_str[1].([]string))
+	// FDB
+	oldgenmap=make(map[interface{}]interface{})
+	latestgenmap=make(map[interface{}]interface{})
+	for k,v := range latestdb.FBDB{ //(map[Route_key]Route_struct) {
+		latestgenmap[k] =v
+	}
+	for k,v := range olddb.FBDB{
+		oldgenmap[k] =v
+	}
+	notify_changes(latestgenmap, oldgenmap,event_str[2].([]string))
+	//L2Nexthop
+	oldgenmap=make(map[interface{}]interface{})
+	latestgenmap=make(map[interface{}]interface{})
+	for k,v := range latestdb.L2NDB{ //(map[Route_key]Route_struct) {
+		latestgenmap[k] =v
+	}
+	for k,v := range olddb.L2NDB{
+		oldgenmap[k] =v
+	}
+	notify_changes(latestgenmap, oldgenmap,event_str[3].([]string))
+}
+
 
 func resync_with_kernel() {
 	// Build a new DB snapshot from netlink and other sources
@@ -2142,23 +1874,18 @@ func resync_with_kernel() {
 	annotate_db_entries()
 	//Filter the latest DB to retain only entries to be installed
 	apply_install_filters()
-	// Compute changes between current and latest DB versions and
-    // inform subscribers about the changes
-	notify_route_changes(LatestRoutes, Routes)
-        notify_nexthop_changes(LatestNexthop, Nexthops)
-        notify_FDB_changes(LatestFDB, FDB)
-        notify_L2nexthop_changes(LatestL2Nexthop, L2Nexthops)
-	// with db_lock:
+	// Compute changes between current and latest DB versions and inform subscribers about the changes
+	notify_db_changes()
 	Routes = LatestRoutes
 	Nexthops = LatestNexthop
 	Neighbors = LatestNeighbors
 	FDB = LatestFDB
 	L2Nexthops = LatestL2Nexthop
-	delete_latestDB()
+	Delete_latestDB()
 
 }
 
-func delete_latestDB(){
+func Delete_latestDB(){
 	LatestRoutes = make(map[Route_key]Route_struct)
         LatestNeighbors = make(map[Neigh_key]Neigh_Struct)
         LatestNexthop = make(map[Nexthop_key]Nexthop_struct)
@@ -2180,13 +1907,13 @@ func monitor_netlink(p4_enabled bool) {
 	// Inform subscribers to delete configuration for any still remaining Netlink DB objects.
 	log.Println("netlink: Delete any residual objects in DB")
 	for _,R :=  range Routes{
-		notify_route_deleted(R)
+		notify_add_del(R,"route_deleted")
 	}
 	for _,NH := range Nexthops{
-		notify_nexthop_deleted(NH)
+		notify_add_del(NH,"nexthop_deleted")
 	}
 	for _,M := range  FDB {
-		notify_fdb_deleted(M)
+		notify_add_del(M,"FDB_entry_deleted")
 	}
 	log.Println("netlink: DB cleanup completed.")
 	wg.Done()
